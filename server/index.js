@@ -1,5 +1,4 @@
 const express = require('express');
-const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const { Server } = require('socket.io');
@@ -39,11 +38,11 @@ io.on('connection', (socket) => {
 
   socket.on('join-room', (roomId) => {
     const roomMembers = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
-    console.log('Current room members:', roomMembers);
+    // console.log('Current room members:', roomMembers);
 
     if (roomMembers.length > 2) {
       io.to(socket.id).emit('room-full');
-      console.log("Room is full");
+      // console.log("Room is full");
       return;
     }
 

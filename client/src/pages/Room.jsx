@@ -188,7 +188,6 @@ function Room() {
       setTimeout(() => navigate('/'), 1000);
     });
 
-    // Cleanup
     return () => {
       socket.off('user-joined', handleUserJoined);
       socket.off('offer', handleOffer);
@@ -201,7 +200,6 @@ function Room() {
       peerConnections.current.forEach(pc => pc.close());
       peerConnections.current.clear();
 
-      // Clear remote stream
       setRemoteStream(null);
     };
   }, [roomId, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, handleUserLeft, navigate]);
@@ -225,19 +223,14 @@ function Room() {
   };
 
   const leaveRoom = () => {
-    // Stop all tracks
     if (myStream) {
       myStream.getTracks().forEach(track => track.stop());
     }
 
-    // Close all peer connections
     peerConnections.current.forEach(pc => pc.close());
     peerConnections.current.clear();
 
-    // Clear remote stream
     setRemoteStream(null);
-
-    // Navigate back to home
     navigate('/');
   };
 
