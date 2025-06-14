@@ -19,6 +19,54 @@ function Room() {
   const videoRef = useRef(null);
   const peerConnections = useRef(new Map());
   const streamRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const chunkIntervalRef = useRef(null);
+  const connectionEstablishedRef = useRef(false);
+
+  const startRecording = useCallback(() => {
+    if (!myStream || !socket || isRecording) return;
+
+    const mediaRecorder = new MediaRecorder(myStream, {
+      mimeType: 'video/webm;codecs=vp8,opus',
+      videoBitsPerSecond: 2500000 // 2.5 Mbps for 720p
+    });
+
+    mediaRecorderRef.current = mediaRecorder;
+
+    let chunkIndex = 0;
+
+    mediaRecorder.ondataavailable = async (event) => {
+      if (event.data.size > 0) {
+        try {
+          // Convert Blob to ArrayBuffer
+          const arrayBuffer = await event.data.arrayBuffer();
+          
+          socket.emit('media-chunk', {
+            roomId,
+            chunk: arrayBuffer,
+            type: 'video',
+            timestamp: Date.now(),
+            chunkIndex: chunkIndex++
+          });
+        } catch (error) {
+          console.error('Error processing chunk:', error);
+        }
+      }
+    };
+
+    // Record in 10-second chunks
+    mediaRecorder.start(10000);
+    setIsRecording(true);
+  }, [myStream, socket, roomId, isRecording]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      clearInterval(chunkIntervalRef.current);
+      setIsRecording(false);
+    }
+  }, []);
 
   const createPeerConnection = useCallback((userId) => {
     const peerConnection = new RTCPeerConnection({
@@ -47,11 +95,12 @@ function Room() {
 
     // Handle incoming tracks
     peerConnection.ontrack = (event) => {
+      console.log('Received remote track:', event.streams[0]);
       setRemoteStream(event.streams[0]);
     };
 
     return peerConnection;
-  }, [myStream]);
+  }, [myStream, socket]);
 
   const handleUserJoined = useCallback(async (userId) => {
     console.log('User joined:', userId);
@@ -65,7 +114,7 @@ function Room() {
     } catch (error) {
       console.error('Error creating offer:', error);
     }
-  }, [createPeerConnection]);
+  }, [createPeerConnection, socket]);
 
   const handleOffer = useCallback(async ({ from, offer }) => {
     console.log('Received offer from:', from);
@@ -80,7 +129,7 @@ function Room() {
     } catch (error) {
       console.error('Error handling offer:', error);
     }
-  }, [createPeerConnection]);
+  }, [createPeerConnection, socket]);
 
   const handleAnswer = useCallback(async ({ from, answer }) => {
     console.log('Received answer from:', from);
@@ -88,6 +137,7 @@ function Room() {
     if (peerConnection) {
       try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        connectionEstablishedRef.current = true;
       } catch (error) {
         console.error('Error handling answer:', error);
       }
@@ -114,7 +164,8 @@ function Room() {
       peerConnections.current.delete(userId);
     }
     setRemoteStream(null);
-  }, []);
+    stopRecording();
+  }, [stopRecording]);
 
   // Initialize media stream
   useEffect(() => {
@@ -123,7 +174,11 @@ function Room() {
     const initializeMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
+          video: { 
+            width: 1280,
+            height: 720,
+            frameRate: 30
+          }, 
           audio: true 
         });
         
@@ -132,13 +187,11 @@ function Room() {
         if (mounted) {
           streamRef.current = stream;
           setMyStream(stream);
-          // Ensure video element is updated with stream
           if (videoRef.current) {
             console.log('Setting video srcObject');
             videoRef.current.srcObject = stream;
           }
         } else {
-          // Clean up stream if component unmounted during initialization
           stream.getTracks().forEach(track => track.stop());
         }
       } catch (error) {
@@ -166,9 +219,17 @@ function Room() {
     }
   }, [myStream]);
 
+  // Start recording when both streams are available
+  useEffect(() => {
+    if (myStream && remoteStream && !isRecording) {
+      console.log('Starting recording - both streams available');
+      startRecording();
+    }
+  }, [myStream, remoteStream, isRecording, startRecording]);
+
   // socket listeners
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !socket) return;
 
     // Clear any existing remote stream when joining a new room
     setRemoteStream(null);
@@ -201,8 +262,9 @@ function Room() {
       peerConnections.current.clear();
 
       setRemoteStream(null);
+      stopRecording();
     };
-  }, [roomId, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, handleUserLeft, navigate]);
+  }, [roomId, socket, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, handleUserLeft, navigate, stopRecording]);
 
   const toggleMute = () => {
     if (myStream) {
@@ -227,6 +289,7 @@ function Room() {
       myStream.getTracks().forEach(track => track.stop());
     }
 
+    stopRecording();
     peerConnections.current.forEach(pc => pc.close());
     peerConnections.current.clear();
 
