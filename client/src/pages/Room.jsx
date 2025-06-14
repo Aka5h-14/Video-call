@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { io } from 'socket.io-client';
+import { useSocket } from '../contexts/SocketProvider';
 import Navbar from '../components/Navbar';
 
-const socket = io('http://localhost:3000', {
-  reconnection: true,
-  reconnectionAttempts: 5,
-  reconnectionDelay: 1000,
-});
-
 function Room() {
+  const socket = useSocket();
   const { roomId } = useParams();
   const navigate = useNavigate();
   const [myStream, setMyStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState(new Map());
+  const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [error, setError] = useState(null);
@@ -52,11 +47,7 @@ function Room() {
 
     // Handle incoming tracks
     peerConnection.ontrack = (event) => {
-      setRemoteStreams(prev => {
-        const newStreams = new Map(prev);
-        newStreams.set(userId, event.streams[0]);
-        return newStreams;
-      });
+      setRemoteStream(event.streams[0]);
     };
 
     return peerConnection;
@@ -122,11 +113,7 @@ function Room() {
       peerConnection.close();
       peerConnections.current.delete(userId);
     }
-    setRemoteStreams(prev => {
-      const newStreams = new Map(prev);
-      newStreams.delete(userId);
-      return newStreams;
-    });
+    setRemoteStream(null);
   }, []);
 
   // Initialize media stream
@@ -135,13 +122,12 @@ function Room() {
 
     const initializeMedia = async () => {
       try {
-        console.log('Requesting media devices...');
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: true, 
           audio: true 
         });
         
-        console.log('Media stream obtained:', stream);
+        console.log('My Media stream obtained:');
         
         if (mounted) {
           streamRef.current = stream;
@@ -158,6 +144,7 @@ function Room() {
       } catch (error) {
         console.error('Error accessing media devices:', error);
         setError('Failed to access camera and microphone. Please ensure you have granted the necessary permissions.');
+        alert('Failed to access camera and microphone. Please ensure you have granted the necessary permissions.');
       }
     };
 
@@ -179,9 +166,12 @@ function Room() {
     }
   }, [myStream]);
 
-  // Join room and set up socket listeners
+  // socket listeners
   useEffect(() => {
     if (!roomId) return;
+
+    // Clear any existing remote stream when joining a new room
+    setRemoteStream(null);
 
     // Join room
     socket.emit('join-room', roomId);
@@ -194,7 +184,8 @@ function Room() {
     socket.on('user-left', handleUserLeft);
     socket.on('room-full', () => {
       setError('Room is full. Only two people can join a room.');
-      setTimeout(() => navigate('/'), 2000);
+      alert('Room is full. Only two people can join a room.')
+      setTimeout(() => navigate('/'), 1000);
     });
 
     // Cleanup
@@ -209,6 +200,9 @@ function Room() {
       // Close all peer connections
       peerConnections.current.forEach(pc => pc.close());
       peerConnections.current.clear();
+
+      // Clear remote stream
+      setRemoteStream(null);
     };
   }, [roomId, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, handleUserLeft, navigate]);
 
@@ -240,12 +234,15 @@ function Room() {
     peerConnections.current.forEach(pc => pc.close());
     peerConnections.current.clear();
 
+    // Clear remote stream
+    setRemoteStream(null);
+
     // Navigate back to home
     navigate('/');
   };
 
   const handleMouseDown = useCallback((e) => {
-    if (remoteStreams.size === 0) return;
+    if (!remoteStream) return;
     
     const rect = videoRef.current.getBoundingClientRect();
     const offsetX = e.clientX - rect.left;
@@ -253,10 +250,22 @@ function Room() {
     
     setDragOffset({ x: offsetX, y: offsetY });
     setIsDragging(true);
-  }, [remoteStreams.size]);
+  }, [remoteStream]);
+
+  const handleTouchStart = useCallback((e) => {
+    if (!remoteStream) return;
+    
+    const touch = e.touches[0];
+    const rect = videoRef.current.getBoundingClientRect();
+    const offsetX = touch.clientX - rect.left;
+    const offsetY = touch.clientY - rect.top;
+    
+    setDragOffset({ x: offsetX, y: offsetY });
+    setIsDragging(true);
+  }, [remoteStream]);
 
   const handleMouseMove = useCallback((e) => {
-    if (!isDragging || remoteStreams.size === 0) return;
+    if (!isDragging || !remoteStream) return;
 
     requestAnimationFrame(() => {
       const containerRect = containerRef.current.getBoundingClientRect();
@@ -276,9 +285,38 @@ function Room() {
 
       setPosition({ x: newX, y: newY });
     });
-  }, [isDragging, dragOffset, remoteStreams.size]);
+  }, [isDragging, dragOffset, remoteStream]);
+
+  const handleTouchMove = useCallback((e) => {
+    if (!isDragging || !remoteStream) return;
+    e.preventDefault(); // Prevent scrolling while dragging
+
+    const touch = e.touches[0];
+    requestAnimationFrame(() => {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const videoRect = videoRef.current.getBoundingClientRect();
+      
+      // Calculate new position relative to the container
+      let newX = touch.clientX - containerRect.left - dragOffset.x;
+      let newY = touch.clientY - containerRect.top - dragOffset.y;
+
+      // Keep video within container bounds with padding
+      const padding = 16; // 1rem padding
+      const maxX = containerRect.width - videoRect.width - padding;
+      const maxY = containerRect.height - videoRect.height - padding;
+
+      newX = Math.max(padding, Math.min(newX, maxX));
+      newY = Math.max(padding, Math.min(newY, maxY));
+
+      setPosition({ x: newX, y: newY });
+    });
+  }, [isDragging, dragOffset, remoteStream]);
 
   const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
     setIsDragging(false);
   }, []);
 
@@ -286,26 +324,30 @@ function Room() {
     if (isDragging) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('touchmove', handleTouchMove, { passive: false });
+      document.addEventListener('touchend', handleTouchEnd);
     }
 
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd]);
 
   // Memoize the video container style to prevent unnecessary re-renders
   const localVideoStyle = useMemo(() => ({
     transform: `translate(${position.x}px, ${position.y}px)`,
     zIndex: 50,
-    cursor: remoteStreams.size > 0 ? 'move' : 'default',
+    cursor: remoteStream ? 'move' : 'default',
     transition: isDragging ? 'none' : 'transform 0.1s ease-out',
     maxWidth: 'calc(100% - 2rem)',
     maxHeight: 'calc(100% - 7rem)',
     left:'0',
     top: '0',
     pointerEvents: 'auto'
-  }), [position, remoteStreams.size, isDragging]);
+  }), [position, remoteStream, isDragging]);
 
   // Memoize the remote video container style
   const remoteVideoStyle = useMemo(() => ({
@@ -324,41 +366,39 @@ function Room() {
         {/* Main video container */}
         <div ref={containerRef} className="w-full h-full overflow-hidden rounded-lg">
           {/* Remote video */}
-          {remoteStreams.size > 0 && (
+          {remoteStream && (
             <div 
               className="absolute w-full h-full "
               style={remoteVideoStyle}
             >
-              {Array.from(remoteStreams.values()).map((stream, index) => (
-                <video
-                  key={index}
-                  ref={el => {
-                    if (el) {
-                      console.log('Setting remote video srcObject');
-                      el.srcObject = stream;
-                    }
-                  }}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-contain"
-                />
-              ))}
+              <video
+                ref={el => {
+                  if (el) {
+                    console.log('Setting remote video srcObject');
+                    el.srcObject = remoteStream;
+                  }
+                }}
+                autoPlay
+                playsInline
+                className="w-full h-full object-contain"
+              />
             </div>
           )}
 
           {/* Local video */}
           {myStream && (
             <div
-              className={`absolute ${remoteStreams.size > 0 ? 'w-32 sm:w-64 lg:w-72' : 'w-full h-full'}`}
+              className={`absolute ${remoteStream ? 'w-32 sm:w-64 lg:w-72' : 'w-full h-full'}`}
               style={localVideoStyle}
               onMouseDown={handleMouseDown}
+              onTouchStart={handleTouchStart}
             >
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                className={`w-full h-full ${remoteStreams.size > 0 ? 'object-cover' : 'object-contain'} rounded-lg shadow-lg`}
+                className={`w-full h-full ${remoteStream ? 'object-cover' : 'object-contain'} rounded-lg shadow-lg`}
                 style={{ backgroundColor: 'black' }}
               />
             </div>
@@ -408,7 +448,7 @@ function Room() {
 
         {/* Error message */}
         {error && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-100">
             {error}
           </div>
         )}

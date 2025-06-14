@@ -1,69 +1,74 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: ["https://192.168.29.89:5173", "http://192.168.29.89:5173", "https://localhost:5173", "http://localhost:5173"],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 
-const server = http.createServer(app);
-const io = new Server(server, {
+// SSL certificate
+const options = {
+  key: fs.readFileSync(path.join(__dirname, 'certs', 'key.pem')),
+  cert: fs.readFileSync(path.join(__dirname, 'certs', 'cert.pem'))
+};
+
+const httpsServer = https.createServer(options, app);
+
+const io = new Server(httpsServer, {
   cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"]
-  }
+    origin: ["https://192.168.29.89:5173", "http://192.168.29.89:5173", "https://localhost:5173", "http://localhost:5173"],
+    methods: ["GET", "POST"],
+    credentials: true
+  },
 });
 
-const rooms = new Map();
+httpsServer.on('error', (error) => {
+  console.error('HTTPS Server Error:', error);
+});
+
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join-room', (roomId) => {
-    console.log(`User ${socket.id} joining room ${roomId}`);
-    
     const roomMembers = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
-    
+    console.log('Current room members:', roomMembers);
+
     if (roomMembers.length > 2) {
-      socket.emit('room-full');
+      io.to(socket.id).emit('room-full');
+      console.log("Room is full");
       return;
     }
-    
+
     socket.join(roomId);
-    console.log(`Room ${roomId} members:`, roomMembers);
-    
     socket.to(roomId).emit('user-joined', socket.id);
-    
-    const otherUsers = roomMembers.filter(id => id !== socket.id);
-    socket.emit('room-users', otherUsers);
   });
 
   socket.on('offer', ({ to, offer }) => {
-    console.log(`Offer from ${socket.id} to ${to}`);
+    // console.log(`Offer from ${socket.id} to ${to}`);
     io.to(to).emit('offer', { from: socket.id, offer });
   });
 
   socket.on('answer', ({ to, answer }) => {
-    console.log(`Answer from ${socket.id} to ${to}`);
+    // console.log(`Answer from ${socket.id} to ${to}`);
     io.to(to).emit('answer', { from: socket.id, answer });
   });
 
   socket.on('ice-candidate', ({ to, candidate }) => {
-    console.log(`ICE candidate from ${socket.id} to ${to}`);
+    // console.log(`ICE candidate from ${socket.id} to ${to}`);
     io.to(to).emit('ice-candidate', { from: socket.id, candidate });
-  });
-
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    socket.rooms.forEach(roomId => {
-      if (roomId !== socket.id) {
-        socket.to(roomId).emit('user-left', socket.id);
-      }
-    });
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-}); 
+
+httpsServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`HTTPS Server listening on https://192.168.29.89:${PORT}`);
+});
