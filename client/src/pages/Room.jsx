@@ -63,7 +63,6 @@ function Room() {
     //     }`,
     //   );
     // }
-    let hasSentInitSegment = false;
 
     const recorder = new RecordRTC(myStream, {
       type: 'video',
@@ -71,8 +70,8 @@ function Room() {
       recorderType: RecordRTC.MediaStreamRecorder,
       disableLogs: true,
       timeSlice: 10000, // 10 seconds per chunk
-      bitsPerSecond: 2628000,
-      videoBitsPerSecond: 2500000,
+      bitsPerSecond: 2528000,
+      videoBitsPerSecond: 2400000,
       audioBitsPerSecond: 128000,
       frameRate: 26,
       ondataavailable: async (blob) => {
@@ -84,27 +83,12 @@ function Room() {
           console.log(blob, chunkIndex);
           const arrayBuffer = await blob.arrayBuffer();
 
-          // Send initialization segment first
-          if (!hasSentInitSegment) {
-            socket.emit('media-chunk', {
-              roomId,
-              chunk: arrayBuffer,
-              type: blob.type,
-              timestamp: Date.now(),
-              chunkIndex: -1, // Special index for init segment
-              isInitSegment: true
-            });
-            hasSentInitSegment = true;
-            return;
-          }
-
           socket.emit('media-chunk', {
             roomId,
             chunk: arrayBuffer,
             type: blob.type,
             timestamp: Date.now(),
             chunkIndex: chunkIndex++,
-            isInitSegment: false
           });
         }
       }
@@ -150,12 +134,19 @@ function Room() {
 
     // Handle incoming tracks
     peerConnection.ontrack = (event) => {
-      setRemoteStream(event.streams[0]);
-      remoteVideoRef.current = event.remoteStream;
+      const stream = event.streams[0];
+      setRemoteStream(stream);
+      // Use a small timeout to ensure the video element is mounted
+      setTimeout(() => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream;
+        }
+      }, 0);
     };
 
     return peerConnection;
   }, [myStream, socket]);
+
 
   const handleUserJoined = useCallback(async (userId) => {
     console.log('User joined:', userId);
@@ -232,7 +223,7 @@ function Room() {
   const getDevices = useCallback(async () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      console.log(devices);
+      // console.log(devices);
       const audioInputs = devices
         .filter(device => device.kind === 'audioinput')
         .filter((device, index, self) =>
@@ -630,6 +621,17 @@ function Room() {
     };
   }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd]);
 
+  // Add a new useEffect for remote video
+  useEffect(() => {
+    if (remoteStream && remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+    return () => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = null;
+      }
+    };
+  }, [remoteStream]);
 
   return (
     <div className="flex flex-col h-screen bg-gray-900">

@@ -14,12 +14,12 @@ function Navbar({ roomId }) {
   };
 
   return (
-    <div className="bg-gray-800 text-white p-4 shadow-lg">
+    <div className="bg-gray-800 text-white p-4 shadow-lg font-sans">
       <div className="container mx-auto flex justify-between items-center">
         <div className="flex items-center space-x-4">
           <h1 className="text-xl font-semibold">Video Call</h1>
           <div className="flex items-center space-x-2">
-            <span className="text-gray-400">Meeting Code:</span>
+            <span className="text-gray-400">Meet Code:</span>
             <div className="flex items-center space-x-2">
               <span className="font-mono bg-gray-700 px-3 py-1.5 rounded">{roomId}</span>
               <button

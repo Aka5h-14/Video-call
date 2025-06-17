@@ -47,8 +47,6 @@ const activeSessions = new Map();
 const userMappings = new Map();
 // Store file streams
 const fileStreams = new Map();
-// Store initialization segments
-const initSegments = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -103,7 +101,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('media-chunk', ({ roomId, chunk, type, timestamp, chunkIndex, isInitSegment }) => {
+  socket.on('media-chunk', ({ roomId, chunk, type, timestamp, chunkIndex }) => {
     const session = activeSessions.get(roomId);
     if (!session) return;
 
@@ -113,12 +111,6 @@ io.on('connection', (socket) => {
     const userDir = userMapping.isUser1 ? session.user1Dir : session.user2Dir;
     const streamKey = `${roomId}_${userMapping.isUser1 ? 'user1' : 'user2'}`;
     
-    if (isInitSegment) {
-      // Store initialization segment
-      const initKey = `${streamKey}_init`;
-      initSegments.set(initKey, chunk);
-      return;
-    }
 
     // Get or create file stream
     let fileStream = fileStreams.get(streamKey);
@@ -126,14 +118,6 @@ io.on('connection', (socket) => {
       const filePath = path.join(userDir, 'recording.mp4');
       fileStream = fs.createWriteStream(filePath);
       fileStreams.set(streamKey, fileStream);
-
-      // Write initialization segment first
-      const initKey = `${streamKey}_init`;
-      const initSegment = initSegments.get(initKey);
-      if (initSegment) {
-        const initBuffer = Buffer.from(initSegment);
-        fileStream.write(initBuffer);
-      }
     }
 
     // Convert ArrayBuffer to Buffer and append to file
@@ -167,12 +151,10 @@ io.on('connection', (socket) => {
         if (user1Stream) {
           user1Stream.end();
           fileStreams.delete(`${roomId}_user1`);
-          initSegments.delete(`${roomId}_user1_init`);
         }
         if (user2Stream) {
           user2Stream.end();
           fileStreams.delete(`${roomId}_user2`);
-          initSegments.delete(`${roomId}_user2_init`);
         }
 
         console.log(`Session ended. User1 chunks: ${session.user1Chunks}, User2 chunks: ${session.user2Chunks}`);
