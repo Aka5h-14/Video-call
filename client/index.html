@@ -16,3 +16,12 @@
 </body>
 
 </html>
+
+
+ffmpeg -i user1_rec.mp4 -i user2_rec.mp4 -filter_complex "
+[0:v]scale=iw*min(640/iw\,720/ih):ih*min(640/iw\,720/ih),pad=640:720:(640-iw*min(640/iw\,720/ih))/2:(720-ih*min(640/iw\,720/ih))/2,setsar=1[v0];
+[1:v]scale=iw*min(640/iw\,720/ih):ih*min(640/iw\,720/ih),pad=640:720:(640-iw*min(640/iw\,720/ih))/2:(720-ih*min(640/iw\,720/ih))/2,setsar=1[v1];
+[v0][v1]hstack=inputs=2[v];
+[0:a][1:a]amix=inputs=2:duration=shortest[a]
+" -map "[v]" -map "[a]" -c:v libx264 -c:a aac -crf 23 -preset veryfast output_with_audio.mp4
+

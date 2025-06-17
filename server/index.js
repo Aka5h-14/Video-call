@@ -71,20 +71,12 @@ io.on('connection', (socket) => {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
 
-      // Create user directories
-      const user1Dir = path.join(sessionDir, 'user1');
-      const user2Dir = path.join(sessionDir, 'user2');
-      fs.mkdirSync(user1Dir, { recursive: true });
-      fs.mkdirSync(user2Dir, { recursive: true });
-
       activeSessions.set(roomId, {
         sessionId,
         sessionDir,
         user1: roomMembers[0],
         user2: socket.id,
         startTime: Date.now(),
-        user1Dir,
-        user2Dir,
         user1Chunks: 0,
         user2Chunks: 0
       });
@@ -108,24 +100,15 @@ io.on('connection', (socket) => {
     const userMapping = userMappings.get(socket.id);
     if (!userMapping) return;
 
-    const userDir = userMapping.isUser1 ? session.user1Dir : session.user2Dir;
-    const streamKey = `${roomId}_${userMapping.isUser1 ? 'user1' : 'user2'}`;
-    
+    const userPrefix = userMapping.isUser1 ? 'user1' : 'user2';
+    const videoFileName = `${userPrefix}_rec.mp4`;
+    const videoFilePath = path.join(session.sessionDir, videoFileName);
 
-    // Get or create file stream
-    let fileStream = fileStreams.get(streamKey);
-    if (!fileStream) {
-      const filePath = path.join(userDir, 'recording.mp4');
-      fileStream = fs.createWriteStream(filePath);
-      fileStreams.set(streamKey, fileStream);
-    }
-
-    // Convert ArrayBuffer to Buffer and append to file
-    const buffer = Buffer.from(chunk);
-    fileStream.write(buffer, (err) => {
+    // Append chunk to the video file
+    fs.appendFile(videoFilePath, Buffer.from(chunk), (err) => {
       if (err) {
-        console.error('Error writing chunk:', err);
-        socket.emit('chunk-error', { error: 'Failed to write chunk' });
+        console.error('Error writing video chunk:', err);
+        socket.emit('chunk-error', { error: 'Failed to write video chunk' });
       } else {
         // Update chunk count
         if (userMapping.isUser1) {
@@ -133,7 +116,7 @@ io.on('connection', (socket) => {
         } else {
           session.user2Chunks++;
         }
-        console.log(`Appended chunk ${chunkIndex} for ${userMapping.isUser1 ? 'user1' : 'user2'}`);
+        console.log(`Appended chunk to ${videoFileName} for ${userPrefix}`);
       }
     });
   });
@@ -144,19 +127,6 @@ io.on('connection', (socket) => {
     // Clean up any active sessions when user disconnects
     for (const [roomId, session] of activeSessions.entries()) {
       if (session.user1 === socket.id || session.user2 === socket.id) {
-        // Close file streams
-        const user1Stream = fileStreams.get(`${roomId}_user1`);
-        const user2Stream = fileStreams.get(`${roomId}_user2`);
-        
-        if (user1Stream) {
-          user1Stream.end();
-          fileStreams.delete(`${roomId}_user1`);
-        }
-        if (user2Stream) {
-          user2Stream.end();
-          fileStreams.delete(`${roomId}_user2`);
-        }
-
         console.log(`Session ended. User1 chunks: ${session.user1Chunks}, User2 chunks: ${session.user2Chunks}`);
         activeSessions.delete(roomId);
         break;

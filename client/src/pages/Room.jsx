@@ -70,9 +70,9 @@ function Room() {
       recorderType: RecordRTC.MediaStreamRecorder,
       disableLogs: true,
       timeSlice: 10000, // 10 seconds per chunk
-      bitsPerSecond: 2528000,
-      videoBitsPerSecond: 2400000,
-      audioBitsPerSecond: 128000,
+      bitsPerSecond: 1628000,
+      videoBitsPerSecond: 1500000,
+      audioBitsPerSecond:  128000,
       frameRate: 26,
       ondataavailable: async (blob) => {
         if (blob.size > 0) {
