@@ -45,6 +45,10 @@ httpsServer.on('error', (error) => {
 const activeSessions = new Map();
 // Store user mappings
 const userMappings = new Map();
+// Store file streams
+const fileStreams = new Map();
+// Store initialization segments
+const initSegments = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -62,7 +66,7 @@ io.on('connection', (socket) => {
 
     // Initialize recording session when second user joins
     if (roomMembers.length === 1) {
-      const sessionId = `${roomId}_${Date.now()}`;
+      const sessionId = `${roomId}`;
       const sessionDir = path.join(sessionsDir, sessionId);
       
       if (!fs.existsSync(sessionDir)) {
@@ -99,7 +103,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('media-chunk', ({ roomId, chunk, type, timestamp, chunkIndex }) => {
+  socket.on('media-chunk', ({ roomId, chunk, type, timestamp, chunkIndex, isInitSegment }) => {
     const session = activeSessions.get(roomId);
     if (!session) return;
 
@@ -107,15 +111,37 @@ io.on('connection', (socket) => {
     if (!userMapping) return;
 
     const userDir = userMapping.isUser1 ? session.user1Dir : session.user2Dir;
-    const fileName = `chunk_${chunkIndex.toString().padStart(6, '0')}.webm`;
-    const filePath = path.join(userDir, fileName);
+    const streamKey = `${roomId}_${userMapping.isUser1 ? 'user1' : 'user2'}`;
+    
+    if (isInitSegment) {
+      // Store initialization segment
+      const initKey = `${streamKey}_init`;
+      initSegments.set(initKey, chunk);
+      return;
+    }
 
-    // Convert ArrayBuffer to Buffer and write to file
+    // Get or create file stream
+    let fileStream = fileStreams.get(streamKey);
+    if (!fileStream) {
+      const filePath = path.join(userDir, 'recording.mp4');
+      fileStream = fs.createWriteStream(filePath);
+      fileStreams.set(streamKey, fileStream);
+
+      // Write initialization segment first
+      const initKey = `${streamKey}_init`;
+      const initSegment = initSegments.get(initKey);
+      if (initSegment) {
+        const initBuffer = Buffer.from(initSegment);
+        fileStream.write(initBuffer);
+      }
+    }
+
+    // Convert ArrayBuffer to Buffer and append to file
     const buffer = Buffer.from(chunk);
-    fs.writeFile(filePath, buffer, (err) => {
+    fileStream.write(buffer, (err) => {
       if (err) {
-        console.error('Error saving chunk:', err);
-        socket.emit('chunk-error', { error: 'Failed to save chunk' });
+        console.error('Error writing chunk:', err);
+        socket.emit('chunk-error', { error: 'Failed to write chunk' });
       } else {
         // Update chunk count
         if (userMapping.isUser1) {
@@ -123,24 +149,42 @@ io.on('connection', (socket) => {
         } else {
           session.user2Chunks++;
         }
-        console.log(`Saved chunk ${chunkIndex} for ${userMapping.isUser1 ? 'user1' : 'user2'}`);
+        console.log(`Appended chunk ${chunkIndex} for ${userMapping.isUser1 ? 'user1' : 'user2'}`);
       }
     });
   });
 
   socket.on('disconnect', () => {
-    // Clean up user mapping
     userMappings.delete(socket.id);
 
     // Clean up any active sessions when user disconnects
     for (const [roomId, session] of activeSessions.entries()) {
       if (session.user1 === socket.id || session.user2 === socket.id) {
+        // Close file streams
+        const user1Stream = fileStreams.get(`${roomId}_user1`);
+        const user2Stream = fileStreams.get(`${roomId}_user2`);
+        
+        if (user1Stream) {
+          user1Stream.end();
+          fileStreams.delete(`${roomId}_user1`);
+          initSegments.delete(`${roomId}_user1_init`);
+        }
+        if (user2Stream) {
+          user2Stream.end();
+          fileStreams.delete(`${roomId}_user2`);
+          initSegments.delete(`${roomId}_user2_init`);
+        }
+
         console.log(`Session ended. User1 chunks: ${session.user1Chunks}, User2 chunks: ${session.user2Chunks}`);
         activeSessions.delete(roomId);
         break;
       }
     }
   });
+
+  socket.on("discnt",( ({roomId}) => {
+    socket.to(roomId).emit("user-disconnet",socket.id);
+  }))
 
   socket.on('offer', ({ to, offer }) => {
     // console.log(`Offer from ${socket.id} to ${to}`);
