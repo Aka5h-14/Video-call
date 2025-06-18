@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../contexts/SocketProvider';
 import Navbar from '../components/Navbar';
 import RecordRTC from 'recordrtc';
+import { useAuth0 } from '@auth0/auth0-react';
 
 
 function Room() {
+  const { user, isLoading } = useAuth0();
   const socket = useSocket();
   const { roomId } = useParams();
   const navigate = useNavigate();
@@ -32,6 +34,15 @@ function Room() {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const connectionEstablishedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      navigate("/");
+    }
+  }, [user, navigate, isLoading]);
+  // if (isLoading) {
+  //     return <div>Loading...</div>;
+  // }
 
   const startRecording = useCallback(() => {
     if (!myStream || !socket || isRecording) return;
@@ -72,19 +83,20 @@ function Room() {
       timeSlice: 10000, // 10 seconds per chunk
       bitsPerSecond: 1628000,
       videoBitsPerSecond: 1500000,
-      audioBitsPerSecond:  128000,
+      audioBitsPerSecond: 128000,
       frameRate: 26,
       ondataavailable: async (blob) => {
         if (blob.size > 0) {
-          const durationInSec = 10; // if using timeSlice: 10000
-          const bitrate = (blob.size * 8) / durationInSec; // bits per second
-          console.log('Approx Bitrate:', bitrate, 'bps');
+          // const durationInSec = 10; // if using timeSlice: 10000
+          // const bitrate = (blob.size * 8) / durationInSec; // bits per second
+          // console.log('Approx Bitrate:', bitrate, 'bps');
 
           console.log(blob, chunkIndex);
           const arrayBuffer = await blob.arrayBuffer();
 
           socket.emit('media-chunk', {
             roomId,
+            user: user.email,
             chunk: arrayBuffer,
             type: blob.type,
             timestamp: Date.now(),
@@ -481,43 +493,52 @@ function Room() {
 
   // socket listeners
   useEffect(() => {
-    if (!roomId || !socket) return;
+    if (!roomId || !socket || !user) return;
 
     setRemoteStream(null);
     remoteVideoRef.current = null;
 
-    // Join room
-    socket.emit('join-room', roomId);
+    // Join room with email
+    socket.emit('join-room', { roomId, email: user.email });
 
-    // Set up socket event listeners
-    socket.on('user-joined', handleUserJoined);
+    socket.on('user-joined', ({ socketId, email }) => {
+      console.log('User joined:', email);
+      handleUserJoined(socketId);
+    });
     socket.on('offer', handleOffer);
     socket.on('answer', handleAnswer);
     socket.on('ice-candidate', handleIceCandidate);
-    socket.on('user-disconnet', userDisconnect);
+    socket.on('user-disconnet', ({ socketId, email }) => {
+      console.log('User disconnected:', email);
+      userDisconnect();
+    });
+    socket.on('chunk-error', ({error})=>{
+      stopRecording();
+      setError(error);
+      setTimeout(() => navigate('/'), 6000);
+    })
     socket.on('room-full', () => {
       setError('Room is full. Only two people can join a room.');
       setTimeout(() => navigate('/'), 6000);
     });
 
-    return () => {
 
-      socket.off('user-joined', handleUserJoined);
+    return () => {
+      stopRecording();
+      
+      socket.off('user-joined');
       socket.off('offer', handleOffer);
       socket.off('answer', handleAnswer);
       socket.off('ice-candidate', handleIceCandidate);
       socket.off("user-disconnet", userDisconnect);
+      socket.off('chunk-error');
       socket.off('room-full');
 
-
-      // Close all peer connections
       peerConnections.current.forEach(pc => pc.close());
       peerConnections.current.clear();
-
       setRemoteStream(null);
-      stopRecording();
     };
-  }, [roomId, socket, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, userDisconnect, navigate]);
+  }, [roomId, socket, user, handleUserJoined, handleOffer, handleAnswer, handleIceCandidate, userDisconnect, stopRecording, navigate]);
 
   // Update video element
   useEffect(() => {
@@ -634,189 +655,191 @@ function Room() {
   }, [remoteStream]);
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900">
-      <Navbar roomId={roomId} />
+    <>
+      <Navbar roomId={roomId} isDisabled={true} />
+      <div className="flex flex-col h-[90vh] bg-gray-900">
 
-      <div className="flex-1 relative p-4">
-        {/* Error message */}
-        {error && (
-          <div className="absolute top-0 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-[100]">
-            {error}
-          </div>
-        )}
-
-        {/* Main video container */}
-        <div ref={containerRef} className="w-full h-full overflow-hidden rounded-lg">
-          {/* Remote video */}
-          {remoteStream && (
-            <div
-              className="absolute w-full h-full "
-              style={{
-                maxWidth: 'calc(100% - 2rem)',
-                maxHeight: 'calc(100% - 7rem)',
-                left: '1rem',
-                top: '1rem',
-                zIndex: 10
-              }}
-            >
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-contain"
-              />
+        <div className="flex-1 relative p-4">
+          {/* Error message */}
+          {error && (
+            <div className="absolute top-0 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-[100]">
+              {error}
             </div>
           )}
 
-          {/* Local video */}
-          {myStream && (
-            <div
-              className={`absolute ${remoteStream ? 'w-32 sm:w-64 lg:w-72' : 'w-full h-full'}`}
-              style={{
-                transform: `translate(${position.x}px, ${position.y}px)`,
-                zIndex: 20,
-                cursor: remoteStream ? 'move' : 'default',
-                transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-                maxWidth: 'calc(100% - 2rem)',
-                maxHeight: 'calc(100% - 7rem)',
-                left: '0',
-                top: '0',
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={handleMouseDown}
-              onTouchStart={handleTouchStart}
-            >
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full ${remoteStream ? 'object-cover' : 'object-contain'} rounded-lg shadow-lg`}
-                style={{ backgroundColor: 'black' }}
-              />
-            </div>
-          )}
-        </div>
+          {/* Main video container */}
+          <div ref={containerRef} className="w-full h-full rounded-lg">
+            {/* Remote video */}
+            {remoteStream && (
+              <div
+                className="absolute w-full h-full "
+                style={{
+                  maxWidth: 'calc(100% - 2rem)',
+                  maxHeight: 'calc(100% - 7rem)',
+                  left: '1rem',
+                  top: '1rem',
+                  zIndex: 10
+                }}
+              >
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
 
-        {/* Controls */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 flex bg-black bg-opacity-50">
-          <div className='w-full flex justify-center gap-2 sm:gap-4'>
-            <button
-              onClick={toggleMute}
-              className={`p-3 rounded-full ${isMuted ? 'bg-red-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
-            >
-              {isMuted ? (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                </svg>
-              ) : (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                </svg>
-              )}
-            </button>
-            <button
-              onClick={toggleVideo}
-              className={`p-3 rounded-full ${isVideoOff ? 'bg-red-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
-            >
-              {isVideoOff ? (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              ) : (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              )}
-            </button>
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className={`p-3 rounded-full ${showSettings ? 'bg-blue-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
-            >
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-            <button
-              onClick={leaveRoom}
-              className="p-3 rounded-full bg-red-500 hover:bg-opacity-80 transition-colors"
-            >
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-            </button>
+            {/* Local video */}
+            {myStream && (
+              <div
+                className={`absolute ${remoteStream ? 'w-32 sm:w-64 lg:w-72' : 'w-full h-full'}`}
+                style={{
+                  transform: `translate(${position.x}px, ${position.y}px)`,
+                  zIndex: 20,
+                  cursor: remoteStream ? 'move' : 'default',
+                  transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                  maxWidth: 'calc(100% - 2rem)',
+                  maxHeight: 'calc(100% - 7rem)',
+                  left: '0',
+                  top: '0',
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={handleMouseDown}
+                onTouchStart={handleTouchStart}
+              >
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`w-full h-full ${remoteStream ? 'object-cover' : 'object-contain'} rounded-lg shadow-lg`}
+                  style={{ backgroundColor: 'black' }}
+                />
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* Settings Modal */}
-        {showSettings && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-white">Device Settings</h2>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="text-gray-400 hover:text-white"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          {/* Controls */}
+          <div className="absolute bottom-0 left-0 right-0 p-2 sm:p-3 flex bg-black bg-opacity-50">
+            <div className='w-full flex justify-center gap-2 sm:gap-4'>
+              <button
+                onClick={toggleMute}
+                className={`p-3 rounded-full ${isMuted ? 'bg-red-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
+              >
+                {isMuted ? (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
                   </svg>
-                </button>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Audio Input</label>
-                  <select
-                    value={selectedAudioDevice}
-                    onChange={(e) => handleAudioDeviceChange(e.target.value)}
-                    className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={toggleVideo}
+                className={`p-3 rounded-full ${isVideoOff ? 'bg-red-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
+              >
+                {isVideoOff ? (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className={`p-3 rounded-full ${showSettings ? 'bg-blue-500' : 'bg-gray-600'} hover:bg-opacity-80 transition-colors`}
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+              <button
+                onClick={leaveRoom}
+                className="p-3 rounded-full bg-red-500 hover:bg-opacity-80 transition-colors"
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Settings Modal */}
+          {showSettings && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-semibold text-white">Device Settings</h2>
+                  <button
+                    onClick={() => setShowSettings(false)}
+                    className="text-gray-400 hover:text-white"
                   >
-                    <option value="" disabled>Select Audio Input</option>
-                    {audioDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Microphone ${device.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                  </select>
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Video Input</label>
-                  <select
-                    value={selectedVideoDevice}
-                    onChange={(e) => handleVideoDeviceChange(e.target.value)}
-                    className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="" disabled>Select Video Input</option>
-                    {videoDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Camera ${device.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Audio Output</label>
-                  <select
-                    value={selectedAudioOutputDevice}
-                    onChange={(e) => handleAudioOutputDeviceChange(e.target.value)}
-                    className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="" disabled>Select Audio Output</option>
-                    {audioOutputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Speaker ${device.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                  </select>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Audio Input</label>
+                    <select
+                      value={selectedAudioDevice}
+                      onChange={(e) => handleAudioDeviceChange(e.target.value)}
+                      className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="" disabled>Select Audio Input</option>
+                      {audioDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${device.deviceId.slice(0, 5)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Video Input</label>
+                    <select
+                      value={selectedVideoDevice}
+                      onChange={(e) => handleVideoDeviceChange(e.target.value)}
+                      className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="" disabled>Select Video Input</option>
+                      {videoDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Camera ${device.deviceId.slice(0, 5)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Audio Output</label>
+                    <select
+                      value={selectedAudioOutputDevice}
+                      onChange={(e) => handleAudioOutputDeviceChange(e.target.value)}
+                      className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="" disabled>Select Audio Output</option>
+                      {audioOutputDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Speaker ${device.deviceId.slice(0, 5)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

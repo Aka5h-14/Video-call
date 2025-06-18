@@ -4,6 +4,8 @@ const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
+const {User ,Admin} = require('./db/index')
+require('dotenv').config()
 
 const app = express();
 app.use(cors({
@@ -12,9 +14,12 @@ app.use(cors({
   credentials: true
 }));
 
+app.get("/", (req,res)=>{
+  res.send("Video Call app backend");
+})
+
 // Create storage directories if they don't exist
-const storageDir = path.join(__dirname, 'storage');
-const sessionsDir = path.join(storageDir, 'sessions');
+const sessionsDir = path.join(__dirname, 'sessions');
 
 if (!fs.existsSync(sessionsDir)) {
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -45,22 +50,30 @@ httpsServer.on('error', (error) => {
 const activeSessions = new Map();
 // Store user mappings
 const userMappings = new Map();
-// Store file streams
-const fileStreams = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join-room', (roomId) => {
+  socket.on('join-room', async({ roomId, email }) => {
     const roomMembers = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
 
     if (roomMembers.length > 2) {
       io.to(socket.id).emit('room-full');
       return;
     }
+    try {
+      const user = await User.findOneAndUpdate(
+        { email: email }, // find
+        { email: email , videos: [] }, // Data to set if found, or to create if not found
+        { upsert: true, new: true }
+      );
+    } catch (error) {
+      console.error('Error finding or creating user in mongoose:', error);
+      throw error;
+    }
 
     socket.join(roomId);
-    socket.to(roomId).emit('user-joined', socket.id);
+    socket.to(roomId).emit('user-joined', { socketId: socket.id, email });
 
     // Initialize recording session when second user joins
     if (roomMembers.length === 1) {
@@ -74,21 +87,21 @@ io.on('connection', (socket) => {
       activeSessions.set(roomId, {
         sessionId,
         sessionDir,
-        user1: roomMembers[0],
-        user2: socket.id,
+        user1: email,
+        user2: null,
         startTime: Date.now(),
         user1Chunks: 0,
         user2Chunks: 0
       });
 
       // Map users to their directories
-      userMappings.set(roomMembers[0], { roomId, isUser1: true });
-      userMappings.set(socket.id, { roomId, isUser1: false });
+      userMappings.set(socket.id, { roomId, email, isUser1: true });
     } else if (roomMembers.length === 2) {
       // Map the second user if they're joining an existing session
       const session = activeSessions.get(roomId);
       if (session) {
-        userMappings.set(socket.id, { roomId, isUser1: false });
+        session.user2 = email;
+        userMappings.set(socket.id, { roomId, email, isUser1: false });
       }
     }
   });
@@ -100,15 +113,14 @@ io.on('connection', (socket) => {
     const userMapping = userMappings.get(socket.id);
     if (!userMapping) return;
 
-    const userPrefix = userMapping.isUser1 ? 'user1' : 'user2';
-    const videoFileName = `${userPrefix}_rec.mp4`;
+    const videoFileName = `${userMapping.email}_rec.mp4`;
     const videoFilePath = path.join(session.sessionDir, videoFileName);
 
     // Append chunk to the video file
     fs.appendFile(videoFilePath, Buffer.from(chunk), (err) => {
       if (err) {
         console.error('Error writing video chunk:', err);
-        socket.emit('chunk-error', { error: 'Failed to write video chunk' });
+        socket.emit('chunk-error', { error: 'Failed to write video chunk in server' });
       } else {
         // Update chunk count
         if (userMapping.isUser1) {
@@ -116,40 +128,43 @@ io.on('connection', (socket) => {
         } else {
           session.user2Chunks++;
         }
-        console.log(`Appended chunk to ${videoFileName} for ${userPrefix}`);
+        console.log(`Appended chunk to ${videoFileName}`);
       }
     });
   });
 
   socket.on('disconnect', () => {
-    userMappings.delete(socket.id);
+    const userMapping = userMappings.get(socket.id);
+    if (userMapping) {
+      const { roomId, email } = userMapping;
+      userMappings.delete(socket.id);
 
-    // Clean up any active sessions when user disconnects
-    for (const [roomId, session] of activeSessions.entries()) {
-      if (session.user1 === socket.id || session.user2 === socket.id) {
-        console.log(`Session ended. User1 chunks: ${session.user1Chunks}, User2 chunks: ${session.user2Chunks}`);
+      // Clean up any active sessions when user disconnects
+      const session = activeSessions.get(roomId);
+      if (session) {
+        console.log(`Session ended. User ${email} disconnected. Chunks: ${userMapping.isUser1 ? session.user1Chunks : session.user2Chunks}`);
         activeSessions.delete(roomId);
-        break;
       }
+      // upload both videos to s3 , add data in mongo user and admin
     }
   });
 
-  socket.on("discnt",( ({roomId}) => {
-    socket.to(roomId).emit("user-disconnet",socket.id);
-  }))
+  socket.on("discnt", ({ roomId }) => {
+    const userMapping = userMappings.get(socket.id);
+    if (userMapping) {
+      socket.to(roomId).emit("user-disconnet", { socketId: socket.id, email: userMapping.email });
+    }
+  });
 
   socket.on('offer', ({ to, offer }) => {
-    // console.log(`Offer from ${socket.id} to ${to}`);
     io.to(to).emit('offer', { from: socket.id, offer });
   });
 
   socket.on('answer', ({ to, answer }) => {
-    // console.log(`Answer from ${socket.id} to ${to}`);
     io.to(to).emit('answer', { from: socket.id, answer });
   });
 
   socket.on('ice-candidate', ({ to, candidate }) => {
-    // console.log(`ICE candidate from ${socket.id} to ${to}`);
     io.to(to).emit('ice-candidate', { from: socket.id, candidate });
   });
 });

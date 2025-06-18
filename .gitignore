@@ -17,7 +17,9 @@ dist
 .env.development.local
 .env.test.local
 .env.production.local
-storage
+sessions
+certs
+generate-cert.js
 
 
 # Logs
