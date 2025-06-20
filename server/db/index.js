@@ -5,6 +5,7 @@ require('dotenv').config();
 mongoose.connect(process.env.MONGO_URL);
 
 const userSchema = new Schema({
+    auth0Id: String,
     email: String,
     videos:[{id: String , date: Date}],
 });

@@ -21,10 +21,6 @@
     @apply bg-secondary-500 text-white hover:bg-secondary-600;
   }
   
-  .btn-danger {
-    @apply bg-danger-500 text-white hover:bg-danger-600;
-  }
-  
   .input {
     @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500/50;
   }

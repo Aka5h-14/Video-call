@@ -97,6 +97,7 @@ function Room() {
           socket.emit('media-chunk', {
             roomId,
             user: user.email,
+            authId: user.sub,
             chunk: arrayBuffer,
             type: blob.type,
             timestamp: Date.now(),
@@ -499,7 +500,7 @@ function Room() {
     remoteVideoRef.current = null;
 
     // Join room with email
-    socket.emit('join-room', { roomId, email: user.email });
+    socket.emit('join-room', { roomId, email: user.email , authId: user.sub });
 
     socket.on('user-joined', ({ socketId, email }) => {
       console.log('User joined:', email);

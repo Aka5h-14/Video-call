@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth0 } from "@auth0/auth0-react";
+import { Link } from 'react-router-dom';
 
 function Navbar({ roomId, isDisabled }) {
   const { loginWithRedirect, logout, user } = useAuth0();
@@ -14,6 +15,9 @@ function Navbar({ roomId, isDisabled }) {
       console.error('Failed to copy:', err);
     }
   };
+
+  const isAdmin = true; // TODO: Replace with real admin check
+  // /api/admin/users  post {email , password}
 
   return (
     <div className="bg-gray-800 text-white p-4 shadow-lg">
@@ -42,17 +46,31 @@ function Navbar({ roomId, isDisabled }) {
               </div>
             </> : ''}
         </div>
-        {user === undefined ? <button className='right-0 bg-green-600 p-1 px-2 rounded-md hover:bg-green-700' onClick={() => loginWithRedirect()}>
-          Sign In
-        </button> : <button className='right-0 bg-red-600 p-1 px-2 rounded-md hover:bg-red-700' onClick={() => {
-          if (!isDisabled) {
-            logout({ logoutParams: { returnTo: window.location.origin } })
-          }
-        }}>
-          Log Out
-        </button>}
+        <div>
+          {isAdmin && !isDisabled && (
+            <Link to="/admin" className="bg-gray-600 p-1 px-2 rounded-md hover:bg-gray-700 mr-2">Admin</Link>
+          )}
+          <Link to="/my-videos" className="bg-gray-600 p-1 px-2 rounded-md hover:bg-gray-700 mr-2">My Videos</Link>
+          {user === undefined ?
+            <button className='bg-green-600 p-1 px-2 rounded-md hover:bg-green-700 ' onClick={() => {
+              if (!isDisabled) {
+                {
+                  loginWithRedirect()
+                }
+              }
+            }}>
+              Sign In
+            </button> :
+            <button className='bg-red-600 p-1 px-2 rounded-md hover:bg-red-700' onClick={() => {
+              if (!isDisabled) {
+                logout({ logoutParams: { returnTo: window.location.origin } })
+              }
+            }}>
+              Log Out
+            </button>}
+        </div>
       </div>
-    </div>
+    </div >
   );
 }
 

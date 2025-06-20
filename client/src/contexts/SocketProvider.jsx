@@ -1,7 +1,9 @@
 import { io } from "socket.io-client";
-import { createContext, useContext, useMemo, useEffect } from "react";
+import { createContext, useContext, useMemo } from "react";
 
 const SocketContext = createContext(null);
+const backendUrl = import.meta.env.VITE_BACKEND_URL;
+// Example: new Socket(backendUrl, ...)
 
 export const useSocket = () => {
   const socket = useContext(SocketContext);
@@ -13,7 +15,7 @@ export const useSocket = () => {
 
 export const SocketProvider = (props) => {
     const socket = useMemo(() =>
-        io("https://192.168.29.89:3000"),[]);
+        io(backendUrl),[]);
 
   return (
     <SocketContext.Provider value={socket}>
