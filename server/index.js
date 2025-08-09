@@ -5,7 +5,8 @@ const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
-const { User, Admin } = require('./db/index')
+const ffmpeg = require('fluent-ffmpeg');
+const { User } = require('./db/index')
 const { adminAuth } = require('./middleware/admin')
 const { auth } = require('express-oauth2-jwt-bearer');
 
@@ -19,7 +20,7 @@ const jwtCheck = auth({
 
 const app = express();
 app.use(cors({
-  origin: ["https://192.168.29.89:5173", "http://192.168.29.89:5173", "https://localhost:5173", "http://localhost:5173"],
+  origin: ["https://192.168.29.89:5173", "https://localhost:5173"],
   methods: ["GET", "POST"],
   credentials: true
 }));
@@ -128,11 +129,126 @@ const activeSessions = new Map();
 // Store user mappings
 const userMappings = new Map();
 
+// Function to merge two videos using fluent-ffmpeg
+function mergeVideos(sessionDir, callback) {
+  const outputVideo = path.join(sessionDir, 'merged_output.mp4');
+  
+  // Read directory and find all .mp4 files
+  let videoFiles;
+  try {
+    const files = fs.readdirSync(sessionDir);
+    videoFiles = files.filter(file => 
+      file.endsWith('_rec.mp4') && 
+      file !== 'merged_output.mp4'
+    ).map(file => path.join(sessionDir, file));
+  } catch (error) {
+    console.error('Error reading session directory:', error);
+    return callback(new Error('Failed to read session directory'));
+  }
+  
+  if (videoFiles.length === 0) {
+    console.log('No video files found to merge in directory:', sessionDir);
+    return callback(new Error('No video files found'));
+  }
+  
+  if (videoFiles.length >= 2) {
+    // Two or more videos exist - merge the first two side by side
+    const video1 = videoFiles[0];
+    const video2 = videoFiles[1];
+    console.log('Merging two videos side by side...');
+    console.log('Video 1:', path.basename(video1));
+    console.log('Video 2:', path.basename(video2));
+    
+    ffmpeg()
+      .input(video1)
+      .input(video2)
+      .complexFilter([
+        // Scale and pad first video
+        '[0:v]scale=iw*min(640/iw\\,720/ih):ih*min(640/iw\\,720/ih),pad=640:720:(640-iw*min(640/iw\\,720/ih))/2:(720-ih*min(640/iw\\,720/ih))/2,setsar=1[v0]',
+        // Scale and pad second video
+        '[1:v]scale=iw*min(640/iw\\,720/ih):ih*min(640/iw\\,720/ih),pad=640:720:(640-iw*min(640/iw\\,720/ih))/2:(720-ih*min(640/iw\\,720/ih))/2,setsar=1[v1]',
+        // Stack videos horizontally
+        '[v0][v1]hstack=inputs=2[v]',
+        // Mix audio from both videos
+        '[0:a][1:a]amix=inputs=2:duration=shortest[a]'
+      ])
+      .outputOptions([
+        '-map [v]',
+        '-map [a]',
+        '-c:v libx264',
+        '-c:a aac',
+        '-crf 23',
+        '-preset veryfast'
+      ])
+      .output(outputVideo)
+      .on('start', (commandLine) => {
+        // console.log('FFmpeg command: ' + commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log('Processing: ' + progress.percent + '% done');
+      })
+      .on('end', () => {
+        console.log('Video merge completed successfully');
+        
+        // Clean up individual video files after successful merge
+        videoFiles.forEach(videoFile => {
+          fs.unlink(videoFile, (err) => {
+            if (err) console.error(`Error deleting video ${path.basename(videoFile)}:`, err);
+            else console.log(`Deleted original video: ${path.basename(videoFile)}`);
+          });
+        });
+        
+        callback(null, outputVideo);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        callback(err);
+      })
+      .run();
+      
+  } else {
+    // Only one video exists - just copy it as the merged output
+    const singleVideo = videoFiles[0];
+    console.log('Processing single video:', path.basename(singleVideo));
+    
+    ffmpeg(singleVideo)
+      .outputOptions([
+        '-c:v libx264',
+        '-c:a aac',
+        '-crf 23',
+        '-preset veryfast'
+      ])
+      .output(outputVideo)
+      .on('start', (commandLine) => {
+        // console.log('FFmpeg command: ' + commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log('Processing: ' + progress.percent + '% done');
+      })
+      .on('end', () => {
+        console.log('Video processing completed successfully');
+        
+        // Clean up original video file
+        fs.unlink(singleVideo, (err) => {
+          if (err) console.error('Error deleting original video:', err);
+          else console.log(`Deleted original video: ${path.basename(singleVideo)}`);
+        });
+        
+        callback(null, outputVideo);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        callback(err);
+      })
+      .run();
+  }
+}
+
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  // console.log('User connected:', socket.id);
 
   socket.on('join-room', async ({ roomId, email }) => {
-    const roomMembers = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+    let roomMembers = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
 
     if (roomMembers.length > 2) {
       io.to(socket.id).emit('room-full');
@@ -141,6 +257,7 @@ io.on('connection', (socket) => {
 
     socket.join(roomId);
     socket.to(roomId).emit('user-joined', { socketId: socket.id, email });
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Initialize recording session when second user joins
     if (roomMembers.length === 1) {
@@ -200,7 +317,7 @@ io.on('connection', (socket) => {
         } else {
           session.user2Chunks++;
         }
-        console.log(`Appended chunk to ${videoFileName}`);
+        // console.log(`Appended chunk to ${videoFileName}`);
       }
     });
   });
@@ -215,9 +332,19 @@ io.on('connection', (socket) => {
       const session = activeSessions.get(roomId);
       if (session) {
         console.log(`Session ended. User ${email} disconnected. Chunks: ${userMapping.isUser1 ? session.user1Chunks : session.user2Chunks}`);
+        
+        // Merge videos using ffmpeg when user disconnects
+        console.log(`Starting video merge process for session ${session.sessionId}`);
+        mergeVideos(session.sessionDir, (error, outputPath) => {
+          if (error) {
+            console.error('Failed to merge videos:', error);
+          } else {
+            // TODO: upload merged video to s3, add data in mongo user and admin
+          }
+        });
+        
         activeSessions.delete(roomId);
       }
-      // upload both videos to s3 , add data in mongo user and admin
     }
   });
 

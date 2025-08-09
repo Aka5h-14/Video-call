@@ -16,6 +16,12 @@ const adminSchema = new Schema({
     videos:[{id: String , date: Date}]
 })
 
+// const videoSchema = new Schema({
+//     auth0Id: String,
+//     email: String,
+//     videos:[{id: String , date: Date}],
+// });
+
 const User = mongoose.model('User', userSchema);
 const Admin = mongoose.model("Admin", adminSchema);
 
