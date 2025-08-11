@@ -20,7 +20,7 @@ const jwtCheck = auth({
 
 const app = express();
 app.use(cors({
-  origin: ["https://192.168.29.89:5173", "https://localhost:5173"],
+  origin: ["https://192.168.29.89:5173", "http://192.168.29.89:5173", "https://localhost:5173"],
   methods: ["GET", "POST"],
   credentials: true
 }));
@@ -117,6 +117,7 @@ const io = new Server(httpsServer, {
     methods: ["GET", "POST"],
     credentials: true
   },
+  transports: ['polling','websocket'],
   maxHttpBufferSize: 1e8 // 100MB buffer size
 });
 

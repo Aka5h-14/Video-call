@@ -14,8 +14,17 @@ export const useSocket = () => {
 }
 
 export const SocketProvider = (props) => {
-    const socket = useMemo(() =>
-        io(backendUrl),[]);
+  const socket = useMemo(() =>
+    io(backendUrl,{
+      transports: ['polling','websocket'],
+      withCredentials: true,
+    })
+    , []);
+
+    socket.on("connect_error", err => {
+      console.log("connect_error", err.message, err);
+    });
+    
 
   return (
     <SocketContext.Provider value={socket}>

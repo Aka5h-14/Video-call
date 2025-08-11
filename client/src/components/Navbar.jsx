@@ -22,12 +22,12 @@ function Navbar({ roomId, isDisabled }) {
   return (
     <div className="bg-gray-800 text-white p-4 shadow-lg">
       <div className="container mx-auto flex justify-between items-center">
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-4 text-sm sm:text-base">
           {roomId ?
             <>
               <span className="text-gray-400">Meet Code:</span>
-              <div className="flex items-center space-x-2">
-                <span className="font-sans bg-gray-700 px-3 py-1.5 rounded">{roomId}</span>
+              <div className="flex sm:items-center space-x-1 sm:space-x-2">
+                <span className="font-sans bg-gray-700 px-1 sm:px-3 py-1.5 rounded">{roomId}</span>
                 <button
                   onClick={copyToClipboard}
                   className="p-1.5 rounded-md bg-gray-700 hover:bg-gray-600 transition-colors"
@@ -47,10 +47,10 @@ function Navbar({ roomId, isDisabled }) {
             </> : ''}
         </div>
         <div>
-          {isAdmin && !isDisabled && (
+          {/* {isAdmin && !isDisabled && (
             <Link to="/admin" className="bg-gray-600 p-1 px-2 rounded-md hover:bg-gray-700 mr-2">Admin</Link>
-          )}
-          <Link to="/my-videos" className="bg-gray-600 p-1 px-2 rounded-md hover:bg-gray-700 mr-2">My Videos</Link>
+          )} */}
+          <Link to="/my-videos" className="bg-gray-600 text-sm sm:text-base p-1 px-2 rounded-md hover:bg-gray-700 mr-2">My Videos</Link>
           {user === undefined ?
             <button className='bg-green-600 p-1 px-2 rounded-md hover:bg-green-700 ' onClick={() => {
               if (!isDisabled) {
@@ -61,7 +61,7 @@ function Navbar({ roomId, isDisabled }) {
             }}>
               Sign In
             </button> :
-            <button className='bg-red-600 p-1 px-2 rounded-md hover:bg-red-700' onClick={() => {
+            <button className='bg-red-600 text-sm sm:text-base p-1 px-2 rounded-md hover:bg-red-700' onClick={() => {
               if (!isDisabled) {
                 logout({ logoutParams: { returnTo: window.location.origin } })
               }
